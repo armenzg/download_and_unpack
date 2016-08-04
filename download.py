@@ -13,7 +13,8 @@ from common import parse_args
 cwd = os.path.dirname(os.path.realpath(__file__))
 
 
-def ungzip(url):
+# Not being used at the moment
+def ungzip_streaming(url):
     def _decompress_gzip_stream(fh):
         """Consume a file handle with gzip data and emit decompressed chunks."""
 
@@ -36,6 +37,13 @@ def ungzip(url):
     with open(filename, 'wb') as fh:
         for chunk in _decompress_gzip_stream(response):
             fh.write(chunk)
+
+
+def ungzip(url):
+    response = urllib2.urlopen(url)
+    compressed_file = StringIO(response.read())
+    t = tarfile.open(fileobj=compressed_file, mode='r:gz')
+    t.extractall()
 
 
 def unbz2(url):
