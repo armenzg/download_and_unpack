@@ -1,4 +1,5 @@
 #! /usr/bin/env python
+import os
 import tarfile
 import time
 import urllib2
@@ -7,6 +8,8 @@ import zlib
 from cStringIO import StringIO
 
 from common import parse_args
+
+cwd = os.path.dirname(os.path.realpath(__file__))
 
 
 def ungzip(url):
@@ -78,10 +81,10 @@ if __name__ == "__main__":
     }
 
     FILES = (
-        'http://localhost:8000/archive.tar',
-        'http://localhost:8000/archive.tar.bz2',
-        'http://localhost:8000/archive.tar.gz',
-        'http://localhost:8000/archive.zip',
+        'file://{}/archive.tar'.format(cwd),
+        'file://{}/archive.tar.bz2'.format(cwd),
+        'file://{}/archive.tar.gz'.format(cwd),
+        'file://{}/archive.zip'.format(cwd),
     )
 
     for url in [options.url] if options.url else FILES:
