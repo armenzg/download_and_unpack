@@ -3,6 +3,7 @@ import os
 import tarfile
 import time
 import urllib2
+import zipfile
 import zlib
 
 from cStringIO import StringIO
@@ -52,7 +53,10 @@ def untar(url):
 
 
 def unzip(url):
-    pass
+    response = urllib2.urlopen(url)
+    compressed_file = StringIO(response.read())
+    zf = zipfile.ZipFile(compressed_file)
+    zf.extractall()
 
 
 def download_unpack_time(url, times):
