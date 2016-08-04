@@ -1,36 +1,88 @@
 #! /usr/bin/env python
+import tarfile
 import time
 import urllib2
 import zlib
 
-from parser import parse_args
+from cStringIO import StringIO
 
-options = parse_args()
-filename = 'file'
+from common import parse_args
 
-def decompress_gzip_stream(fh):
-    """Consume a file handle with gzip data and emit decompressed chunks."""
 
-    # The |32 is magic to parse the gzip header
-    d = zlib.decompressobj(zlib.MAX_WBITS|32)
+def ungzip(url):
+    def _decompress_gzip_stream(fh):
+        """Consume a file handle with gzip data and emit decompressed chunks."""
 
-    while True:
-        data = fh.read(16384)
-        if not data:
-            break
+        # The |32 is magic to parse the gzip header
+        d = zlib.decompressobj(zlib.MAX_WBITS|32)
 
-        yield d.decompress(data)
+        while True:
+            # XXX: Where does this magical number come from?
+            data = fh.read(262144)
+            if not data:
+                break
 
-    yield d.flush()
+            yield d.decompress(data)
 
-times = []
+        yield d.flush()
 
-for i in range(0, 50):
-    start = time.time()
-    response = urllib2.urlopen(options.url)
+    response = urllib2.urlopen(url)
+    # XXX: We still need to untar
+    filename = 'temp.txt'
     with open(filename, 'wb') as fh:
-        for chunk in decompress_gzip_stream(response):
+        for chunk in _decompress_gzip_stream(response):
             fh.write(chunk)
-    times.append(time.time() - start)
 
-print "Average {}".format(reduce(lambda x, y: x + y, times) / float(len(times)))
+
+def unbz2(url):
+    response = urllib2.urlopen(url)
+    compressed_file = StringIO(response.read())
+    t = tarfile.open(fileobj=compressed_file, mode='r:bz2')
+    t.extractall()
+
+
+def untar(url):
+    response = urllib2.urlopen(url)
+    compressed_file = StringIO(response.read())
+    t = tarfile.open(fileobj=compressed_file, mode='r')
+    t.extractall()
+
+
+def unzip(url):
+    pass
+
+
+def download_unpack_time(url, times):
+    timings = []
+    for i in range(0, times):
+        extension = url[url.find('.')+1:]
+        start = time.time()
+        try:
+            EXTENSION_TO_METHOD[extension](url)
+        except:
+            print url
+            raise
+
+        timings.append(time.time() - start)
+
+    print "Average {}\t{}".format(url, reduce(lambda x, y: x + y, timings) / float(len(timings)))
+
+
+if __name__ == "__main__":
+    options = parse_args()
+    EXTENSION_TO_METHOD = {
+        'tar': untar,
+        'tar.bz2': unbz2,
+        'tar.gz':  ungzip,
+        'zip': unzip,
+    }
+
+    FILES = (
+        'http://localhost:8000/archive.tar',
+        'http://localhost:8000/archive.tar.bz2',
+        'http://localhost:8000/archive.tar.gz',
+        'http://localhost:8000/archive.zip',
+    )
+
+    for url in [options.url] if options.url else FILES:
+        download_unpack_time(url, options.times)
