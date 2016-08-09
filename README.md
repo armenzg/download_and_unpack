@@ -1,1 +1,3 @@
-Run `python web_server.py` in one tab and `run.sh` on another.
+This project allows you to execute various types of downloading and unpacking and timing it.
+
+Execute `run.sh` to get some results.
