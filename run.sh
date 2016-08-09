@@ -1,5 +1,5 @@
 #!/bin/sh
-set -ex
+set -e
 ./create_archives.sh
 echo "Here are the averages with the new unpacking methods with local files:"
 python download.py --times 100
