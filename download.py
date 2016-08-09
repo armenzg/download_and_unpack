@@ -70,7 +70,9 @@ def unzip(url):
 def download_unpack_time(url, times):
     timings = []
     for i in range(0, times):
-        extension = url[url.find('.')+1:]
+        filename = url.split('/')[-1]
+        # XXX: bz2/gz instead of tar.{bz2/gz}
+        extension = filename[filename.rfind('.')+1:]
         start = time.time()
         try:
             EXTENSION_TO_METHOD[extension](url)
@@ -87,8 +89,8 @@ if __name__ == "__main__":
     options = parse_args()
     EXTENSION_TO_METHOD = {
         'tar': untar,
-        'tar.bz2': unbz2,
-        'tar.gz':  ungzip,
+        'bz2': unbz2,
+        'gz':  ungzip,
         'zip': unzip,
     }
 
