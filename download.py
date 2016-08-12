@@ -21,7 +21,7 @@ def main():
     options = parse_args()
     level = logging.DEBUG if options.debug else logging.INFO
     logging.basicConfig(stream=sys.stdout, level=level)
-    download_unpack_time(options.url, options.times)
+    download_unpack_time(options.url, options.extract_to, options.times)
 
 
 def parse_args():
@@ -34,20 +34,30 @@ def parse_args():
                         action="store_true",
                         dest="debug",
                         help="set debug for logging.")
+    parser.add_argument("--extract-to", dest="extract_to",
+                        help='Where to extract the files.')
     return parser.parse_args()
 
 
-def unzip(response):
+def unzip(response, extract_to):
+    LOG.info('Using ZipFile to extract to {} from {}'.format(
+        extract_to,
+        response.url,
+    ))
     compressed_file = StringIO(response.read())
     zf = zipfile.ZipFile(compressed_file)
-    zf.extractall()
+    zf.extractall(path=extract_to)
 
 
-def deflate(response, mode):
-    LOG.debug('deflate:\t\t{}'.format(mode))
+def deflate(response, extract_to, mode):
+    LOG.info('Using TarFile to extract to {} with mode {} from {}'.format(
+        extract_to,
+        mode,
+        response.url,
+    ))
     compressed_file = StringIO(response.read())
     t = tarfile.open(fileobj=compressed_file, mode=mode)
-    t.extractall()
+    t.extractall(path=extract_to)
 
 
 def maybe_gzip(response):
@@ -97,7 +107,7 @@ MIMETYPES = {
 }
 
 
-def fetch(url):
+def download_unpack(url, extract_to):
     request = urllib2.Request(url)
     request.add_header('Accept-encoding', 'gzip')
     response = urllib2.urlopen(request)
@@ -120,14 +130,14 @@ def fetch(url):
     function = MIMETYPES[mimetype]['function']
     kwargs = MIMETYPES[mimetype].get('kwargs', {})
 
-    function(response, **kwargs)
+    function(response=response, extract_to=extract_to, **kwargs)
 
 
-def download_unpack_time(url, times):
+def download_unpack_time(url, extract_to, times):
     timings = []
     for i in range(0, times):
         start = time.time()
-        fetch(url)
+        download_unpack(url, extract_to)
         timings.append(time.time() - start)
 
     LOG.info(
