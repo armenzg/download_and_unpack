@@ -1,15 +1,27 @@
 #! /usr/bin/env python
+import gzip
+import logging
 import os
+import sys
 import tarfile
 import time
 import urllib2
+import urlparse
 import zipfile
 import zlib
 
 from argparse import ArgumentParser
 from cStringIO import StringIO
 
-cwd = os.path.dirname(os.path.realpath(__file__))
+CWD = os.path.dirname(os.path.realpath(__file__))
+LOG = logging.getLogger()
+
+
+def main():
+    options = parse_args()
+    level = logging.DEBUG if options.debug else logging.INFO
+    logging.basicConfig(stream=sys.stdout, level=level)
+    download_unpack_time(options.url, options.times)
 
 
 def parse_args():
@@ -18,96 +30,113 @@ def parse_args():
                         help='File to download and unpack.')
     parser.add_argument("--times", dest="times", default=1, type=int,
                         help='How many times to test download a file.')
+    parser.add_argument("--debug",
+                        action="store_true",
+                        dest="debug",
+                        help="set debug for logging.")
     return parser.parse_args()
 
 
-# Not being used at the moment
-def ungzip_streaming(url):
-    def _decompress_gzip_stream(fh):
-        """Consume a file handle with gzip data and emit decompressed chunks."""
-
-        # The |32 is magic to parse the gzip header
-        d = zlib.decompressobj(zlib.MAX_WBITS|32)
-
-        while True:
-            # XXX: Where does this magical number come from?
-            data = fh.read(262144)
-            if not data:
-                break
-
-            yield d.decompress(data)
-
-        yield d.flush()
-
-    response = urllib2.urlopen(url)
-    # XXX: We still need to untar
-    filename = 'temp.txt'
-    with open(filename, 'wb') as fh:
-        for chunk in _decompress_gzip_stream(response):
-            fh.write(chunk)
-
-
-def ungzip(url):
-    response = urllib2.urlopen(url)
-    compressed_file = StringIO(response.read())
-    t = tarfile.open(fileobj=compressed_file, mode='r:gz')
-    t.extractall()
-
-
-def unbz2(url):
-    response = urllib2.urlopen(url)
-    compressed_file = StringIO(response.read())
-    t = tarfile.open(fileobj=compressed_file, mode='r:bz2')
-    t.extractall()
-
-
-def untar(url):
-    response = urllib2.urlopen(url)
-    compressed_file = StringIO(response.read())
-    t = tarfile.open(fileobj=compressed_file, mode='r')
-    t.extractall()
-
-
-def unzip(url):
-    response = urllib2.urlopen(url)
+def unzip(response):
     compressed_file = StringIO(response.read())
     zf = zipfile.ZipFile(compressed_file)
     zf.extractall()
 
 
-def download_unpack_time(url, times):
-    timings = []
-    for i in range(0, times):
+def deflate(response, mode):
+    LOG.debug('deflate:\t\t{}'.format(mode))
+    compressed_file = StringIO(response.read())
+    t = tarfile.open(fileobj=compressed_file, mode=mode)
+    t.extractall()
+
+
+def maybe_gzip(response):
+    # XXX: We need to write file to disk
+    content_encoding = response.headers.get('Content-Encoding')
+
+    if content_encoding == 'gzip':
+        # XXX: Fix comment later
+        LOG.debug('Possibly ungzipping a txt file...')
+        compressed_file = StringIO(response.read())
+        data = gzip.GzipFile(fileobj=compressed_file).read()
+
+    elif not content_encoding:
+        LOG.debug('No content encoding')
+        data = response.read()
+
+    else:
+        raise Exception('We have not yet added support for "{}" encoding'.format(content_encoding))
+
+
+EXTENSION_TO_MIMETYPE = {
+    'bz2': 'application/x-bzip2',
+    'gz':  'application/x-gzip',
+    'tar': 'application/x-tar',
+    'txt': 'text/plain',
+    'zip': 'application/zip',
+}
+MIMETYPES = {
+    'application/x-bzip2': {
+        'function': deflate,
+        'kwargs': {'mode': 'r:bz2'},
+    },
+    'application/x-gzip': {
+        'function': deflate,
+        'kwargs': {'mode': 'r:gz'},
+    },
+    'application/x-tar': {
+        'function': deflate,
+        'kwargs': {'mode': 'r'},
+    },
+    'application/zip': {
+        'function': unzip,
+    },
+    'text/plain': {
+        'function': maybe_gzip,
+    },
+}
+
+
+def fetch(url):
+    request = urllib2.Request(url)
+    request.add_header('Accept-encoding', 'gzip')
+    response = urllib2.urlopen(request)
+
+    parsed_url = urlparse.urlparse(url)
+    if parsed_url[0] == 'file':
         filename = url.split('/')[-1]
         # XXX: bz2/gz instead of tar.{bz2/gz}
         extension = filename[filename.rfind('.')+1:]
-        start = time.time()
-        try:
-            EXTENSION_TO_METHOD[extension](url)
-        except:
-            print url
-            raise
+        mimetype = EXTENSION_TO_MIMETYPE[extension]
+    else:
+        mimetype = response.headers.type
 
+    # This line gives too much information, however, it is good to have around
+    # LOG.debug(response.headers)
+    LOG.debug('Url:\t\t\t{}'.format(url))
+    LOG.debug('Mimetype:\t\t{}'.format(mimetype))
+    LOG.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
+
+    function = MIMETYPES[mimetype]['function']
+    kwargs = MIMETYPES[mimetype].get('kwargs', {})
+
+    function(response, **kwargs)
+
+
+def download_unpack_time(url, times):
+    timings = []
+    for i in range(0, times):
+        start = time.time()
+        fetch(url)
         timings.append(time.time() - start)
 
-    print "Average {}\t{}".format(url, reduce(lambda x, y: x + y, timings) / float(len(timings)))
+    LOG.info(
+        "Average {}  {}".format(
+            round(reduce(lambda x, y: x + y, timings) / float(len(timings)), 4),
+            url
+        )
+    )
 
 
 if __name__ == "__main__":
-    options = parse_args()
-    EXTENSION_TO_METHOD = {
-        'tar': untar,
-        'bz2': unbz2,
-        'gz':  ungzip,
-        'zip': unzip,
-    }
-
-    FILES = (
-        'file://{}/archive.tar'.format(cwd),
-        'file://{}/archive.tar.bz2'.format(cwd),
-        'file://{}/archive.tar.gz'.format(cwd),
-        'file://{}/archive.zip'.format(cwd),
-    )
-
-    for url in [options.url] if options.url else FILES:
-        download_unpack_time(url, options.times)
+    main()
