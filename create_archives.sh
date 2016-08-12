@@ -2,9 +2,11 @@
 # Script to auto-generate the different archive types under the archives directory.
 # Based on whimboo's code
 
-filename=live_backing.log
+filename=log.txt
 if [ ! -e "$filename" ]; then
   wget -q -N https://public-artifacts.taskcluster.net/X_Z6IquRSoKiQMPctHK0PA/0/public/logs/live_backing.log
+  gunzip live_backing.log -c > $filename
+  rm live_backing.log
 fi
 
 if [ ! -e archive.tar ]; then
