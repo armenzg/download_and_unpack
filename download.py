@@ -107,14 +107,14 @@ MIMETYPES = {
 }
 
 
-def download_unpack(url, extract_to):
-    request = urllib2.Request(url)
+def download_unpack(fd, extract_to):
+    request = urllib2.Request(fd)
     request.add_header('Accept-encoding', 'gzip')
     response = urllib2.urlopen(request)
 
-    parsed_url = urlparse.urlparse(url)
-    if parsed_url[0] == 'file':
-        filename = url.split('/')[-1]
+    parsed_fd = urlparse.urlparse(fd)
+    if parsed_fd[0] == 'file':
+        filename = fd.split('/')[-1]
         # XXX: bz2/gz instead of tar.{bz2/gz}
         extension = filename[filename.rfind('.')+1:]
         mimetype = EXTENSION_TO_MIMETYPE[extension]
@@ -123,7 +123,7 @@ def download_unpack(url, extract_to):
 
     # This line gives too much information, however, it is good to have around
     # LOG.debug(response.headers)
-    LOG.debug('Url:\t\t\t{}'.format(url))
+    LOG.debug('Url:\t\t\t{}'.format(fd))
     LOG.debug('Mimetype:\t\t{}'.format(mimetype))
     LOG.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
 
