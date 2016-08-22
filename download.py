@@ -21,7 +21,7 @@ def main():
     options = parse_args()
     level = logging.DEBUG if options.debug else logging.INFO
     logging.basicConfig(stream=sys.stdout, level=level)
-    download_unpack_time(options.url, options.extract_to, options.times)
+    download_unpack_time(options.url, options.times, extract_to=options.extract_to)
 
 
 def parse_args():
@@ -107,7 +107,7 @@ MIMETYPES = {
 }
 
 
-def download_unpack(fd, extract_to):
+def download_unpack(fd, **kwargs):
     request = urllib2.Request(fd)
     request.add_header('Accept-encoding', 'gzip')
     response = urllib2.urlopen(request)
@@ -128,16 +128,16 @@ def download_unpack(fd, extract_to):
     LOG.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
 
     function = MIMETYPES[mimetype]['function']
-    kwargs = MIMETYPES[mimetype].get('kwargs', {})
+    kwargs.update(MIMETYPES[mimetype].get('kwargs', {}))
 
-    function(response=response, extract_to=extract_to, **kwargs)
+    function(response=response, **kwargs)
 
 
-def download_unpack_time(url, extract_to, times):
+def download_unpack_time(url, times, **kwargs):
     timings = []
     for i in range(0, times):
         start = time.time()
-        download_unpack(url, extract_to)
+        download_unpack(url, **kwargs)
         timings.append(time.time() - start)
 
     LOG.info(
