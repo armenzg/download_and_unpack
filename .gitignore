@@ -64,3 +64,6 @@ target/
 # virtualenv
 venv/
 ENV/
+
+# Vim
+*swp
