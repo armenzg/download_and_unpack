@@ -1,5 +1,8 @@
 #! /usr/bin/env python
+import fnmatch
+import functools
 import gzip
+import itertools
 import logging
 import os
 import sys
@@ -21,7 +24,12 @@ def main():
     options = parse_args()
     level = logging.DEBUG if options.debug else logging.INFO
     logging.basicConfig(stream=sys.stdout, level=level)
-    download_unpack_time(options.url, options.times, extract_to=options.extract_to)
+    download_unpack_time(
+        options.url,
+        options.times,
+        extract_to=options.extract_to,
+        extract_dirs=options.extract_dirs
+    )
 
 
 def parse_args():
@@ -36,20 +44,46 @@ def parse_args():
                         help="set debug for logging.")
     parser.add_argument("--extract-to", dest="extract_to",
                         help='Where to extract the files.')
+    parser.add_argument("--extract-dirs", dest="extract_dirs",
+                        action="append",
+                        help='Which directories to extract from a compressed file.')
     return parser.parse_args()
 
 
-def unzip(response, extract_to):
-    LOG.info('Using ZipFile to extract to {} from {}'.format(
+def unzip(response, extract_to='.', extract_dirs='*'):
+    def _filter_entries(namelist):
+        """Filter entries of the archive based on the specified list of to extract dirs."""
+        filter_partial = functools.partial(fnmatch.filter, namelist)
+        for entry in itertools.chain(*map(filter_partial, extract_dirs or ['*'])):
+            yield entry
+
+    LOG.info('Using ZipFile to extract {} to {} from {}'.format(
+        ', '.join(extract_dirs),
         extract_to,
         response.url,
     ))
     compressed_file = StringIO(response.read())
-    zf = zipfile.ZipFile(compressed_file)
-    zf.extractall(path=extract_to)
+    try:
+        with zipfile.ZipFile(compressed_file) as bundle:
+            entries = _filter_entries(bundle.namelist())
+
+            for entry in entries:
+                bundle.extract(entry, path=extract_to)
+
+                # ZipFile doesn't preserve permissions during extraction:
+                # http://bugs.python.org/issue15795
+                fname = os.path.realpath(os.path.join(extract_to, entry))
+                mode = bundle.getinfo(entry).external_attr >> 16 & 0x1FF
+                # Only set permissions if attributes are available. Otherwise all
+                # permissions will be removed eg. on Windows.
+                if mode:
+                    os.chmod(fname, mode)
+
+    except zipfile.BadZipfile as e:
+        print '{} {}'.format(e.message, filename)
 
 
-def deflate(response, extract_to, mode):
+def deflate(response, mode, extract_to='.'):
     LOG.info('Using TarFile to extract to {} with mode {} from {}'.format(
         extract_to,
         mode,
@@ -128,6 +162,8 @@ def download_unpack(fd, **kwargs):
     LOG.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
 
     function = MIMETYPES[mimetype]['function']
+    # Remove kwargs that have None as a value
+    kwargs = dict((k, v) for k, v in kwargs.iteritems() if v)
     kwargs.update(MIMETYPES[mimetype].get('kwargs', {}))
 
     function(response=response, **kwargs)

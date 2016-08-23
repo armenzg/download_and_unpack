@@ -22,5 +22,11 @@ if [ ! -e archive.tar.bz2 ]; then
 fi
 
 if [ ! -e archive.zip ]; then
-  zip archive.zip "$filename"
+  mkdir -p dir1
+  cp $filename dir1
+  mkdir -p dir2
+  touch dir2/empty.txt
+
+  zip archive.zip dir1/* dir2/*
+  rm -rf dir*
 fi
