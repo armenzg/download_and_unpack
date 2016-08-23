@@ -24,6 +24,7 @@ python $script --times 100 --url file://$pwd/archive.tar
 python $script --times 100 --url file://$pwd/archive.tar.bz2
 python $script --times 100 --url file://$pwd/archive.tar.gz
 python $script --times 100 --url file://$pwd/archive.zip
+python $script --extract-dirs dir1/* --url file://$pwd/archive.zip
 echo ""
 
 echo "Here are the averages with the new unpacking methods with production files:"
