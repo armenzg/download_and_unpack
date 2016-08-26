@@ -142,12 +142,21 @@ MIMETYPES = {
 
 
 def download_unpack(fd, **kwargs):
+    parsed_fd = urlparse.urlparse(fd)
+
+    # In case we're referrencing a file without file://
+    if parsed_fd.scheme == '':
+        if not os.path.isfile(fd):
+            raise IOError('Could not find file to extract: {}'.format(fd))
+
+        fd = 'file://%s' % os.path.abspath(fd)
+        parsed_fd = urlparse.urlparse(fd)
+
     request = urllib2.Request(fd)
     request.add_header('Accept-encoding', 'gzip')
     response = urllib2.urlopen(request)
 
-    parsed_fd = urlparse.urlparse(fd)
-    if parsed_fd[0] == 'file':
+    if parsed_fd.scheme == 'file':
         filename = fd.split('/')[-1]
         # XXX: bz2/gz instead of tar.{bz2/gz}
         extension = filename[filename.rfind('.')+1:]
