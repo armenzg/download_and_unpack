@@ -27,8 +27,8 @@ def main():
     download_unpack_time(
         options.url,
         options.times,
-        extract_to=options.extract_to,
-        extract_dirs=options.extract_dirs
+        extract_to='.' if options.extract_to is None else options.extract_to,
+        extract_dirs='*' if options.extract_dirs is None else options.extract_dirs,
     )
 
 
@@ -50,139 +50,208 @@ def parse_args():
     return parser.parse_args()
 
 
-def unzip(response, extract_to='.', extract_dirs='*'):
-    def _filter_entries(namelist):
+# I'm making this module a class to make it easier to compare with Mozharness' code
+class DownloadUnpack():
+    def info(self, msg):
+        LOG.info(msg)
+
+    def debug(self, msg):
+        LOG.debug(msg)
+
+    def warning(self, msg):
+        LOG.warning(msg)
+
+    def _filter_entries(self, namelist, extract_dirs):
         """Filter entries of the archive based on the specified list of to extract dirs."""
         filter_partial = functools.partial(fnmatch.filter, namelist)
-        for entry in itertools.chain(*map(filter_partial, extract_dirs or ['*'])):
+        entries = itertools.chain(*map(filter_partial, extract_dirs or ['*']))
+
+        for entry in entries:
             yield entry
 
-    LOG.info('Using ZipFile to extract {} to {} from {}'.format(
-        ', '.join(extract_dirs),
-        extract_to,
-        response.url,
-    ))
-    compressed_file = StringIO(response.read())
-    try:
-        with zipfile.ZipFile(compressed_file) as bundle:
-            entries = _filter_entries(bundle.namelist())
+    def unzip(self, file_object, extract_to, extract_dirs='*', verbose=False):
+        """This method allows to extract a zip file without writing to disk first.
 
-            for entry in entries:
-                bundle.extract(entry, path=extract_to)
+        Args:
+            file_object (object): Any file like object that is seekable.
+            extract_to (str, optional): where to extract the compressed file.
+            extract_dirs (list, optional): directories inside the archive file to extract.
+                                           Defaults to '*'.
+        """
+        compressed_file = StringIO(file_object.read())
+        try:
+            with zipfile.ZipFile(compressed_file) as bundle:
+                entries = self._filter_entries(bundle.namelist(), extract_dirs)
 
-                # ZipFile doesn't preserve permissions during extraction:
-                # http://bugs.python.org/issue15795
-                fname = os.path.realpath(os.path.join(extract_to, entry))
-                mode = bundle.getinfo(entry).external_attr >> 16 & 0x1FF
-                # Only set permissions if attributes are available. Otherwise all
-                # permissions will be removed eg. on Windows.
-                if mode:
-                    os.chmod(fname, mode)
+                for entry in entries:
+                    print '{} {}'.format(extract_to, entry)
+                    bundle.extract(entry, path=extract_to)
 
-    except zipfile.BadZipfile as e:
-        print '{} {}'.format(e.message, filename)
+                    # ZipFile doesn't preserve permissions during extraction:
+                    # http://bugs.python.org/issue15795
+                    fname = os.path.realpath(os.path.join(extract_to, entry))
+                    mode = bundle.getinfo(entry).external_attr >> 16 & 0x1FF
+                    # Only set permissions if attributes are available. Otherwise all
+                    # permissions will be removed eg. on Windows.
+                    if mode:
+                        os.chmod(fname, mode)
 
-
-def deflate(response, mode, extract_to='.'):
-    LOG.info('Using TarFile to extract to {} with mode {} from {}'.format(
-        extract_to,
-        mode,
-        response.url,
-    ))
-    compressed_file = StringIO(response.read())
-    t = tarfile.open(fileobj=compressed_file, mode=mode)
-    t.extractall(path=extract_to)
+        except zipfile.BadZipfile as e:
+            self.exception('{}'.format(e.message))
 
 
-def maybe_gzip(response):
-    # XXX: We need to write file to disk
-    content_encoding = response.headers.get('Content-Encoding')
+    def deflate(self, file_object, mode, extract_to='.', extract_dirs='*', verbose=False):
+        """This method allows to extract a tar, tar.bz2 and tar.gz file without writing to disk first.
 
-    if content_encoding == 'gzip':
-        # XXX: Fix comment later
-        LOG.debug('Possibly ungzipping a txt file...')
-        compressed_file = StringIO(response.read())
-        data = gzip.GzipFile(fileobj=compressed_file).read()
-
-    elif not content_encoding:
-        LOG.debug('No content encoding')
-        data = response.read()
-
-    else:
-        raise Exception('We have not yet added support for "{}" encoding'.format(content_encoding))
+        Args:
+            file_object (object): Any file like object that is seekable.
+            extract_to (str, optional): where to extract the compressed file.
+        """
+        compressed_file = StringIO(file_object.read())
+        t = tarfile.open(fileobj=compressed_file, mode=mode)
+        t.extractall(path=extract_to)
 
 
-EXTENSION_TO_MIMETYPE = {
-    'bz2': 'application/x-bzip2',
-    'gz':  'application/x-gzip',
-    'tar': 'application/x-tar',
-    'txt': 'text/plain',
-    'zip': 'application/zip',
-}
-MIMETYPES = {
-    'application/x-bzip2': {
-        'function': deflate,
-        'kwargs': {'mode': 'r:bz2'},
-    },
-    'application/x-gzip': {
-        'function': deflate,
-        'kwargs': {'mode': 'r:gz'},
-    },
-    'application/x-tar': {
-        'function': deflate,
-        'kwargs': {'mode': 'r'},
-    },
-    'application/zip': {
-        'function': unzip,
-    },
-    'text/plain': {
-        'function': maybe_gzip,
-    },
-}
+    def maybe_gzip(self, file_object, **kwargs):
+        # XXX: Hack
+        response = file_object
+        # XXX: We need to write file to disk
+        content_encoding = response.headers.get('Content-Encoding')
+
+        if content_encoding == 'gzip':
+            # XXX: Fix comment later
+            LOG.debug('Possibly ungzipping a txt file...')
+            compressed_file = StringIO(response.read())
+            data = gzip.GzipFile(fileobj=compressed_file).read()
+
+        elif not content_encoding:
+            LOG.debug('No content encoding')
+            data = response.read()
+
+        else:
+            raise Exception('We have not yet added support for "{}" encoding'.format(content_encoding))
 
 
-def download_unpack(fd, **kwargs):
-    parsed_fd = urlparse.urlparse(fd)
+    EXTENSION_TO_MIMETYPE = {
+        'bz2': 'application/x-bzip2',
+        'gz':  'application/x-gzip',
+        'tar': 'application/x-tar',
+        'txt': 'text/plain',
+        'zip': 'application/zip',
+    }
+    MIMETYPES = {
+        'application/x-bzip2': {
+            'function': deflate,
+            'kwargs': {'mode': 'r:bz2'},
+        },
+        'application/x-gzip': {
+            'function': deflate,
+            'kwargs': {'mode': 'r:gz'},
+        },
+        'application/x-tar': {
+            'function': deflate,
+            'kwargs': {'mode': 'r'},
+        },
+        'application/zip': {
+            'function': unzip,
+        },
+        'text/plain': {
+            'function': maybe_gzip,
+        },
+    }
 
-    # In case we're referrencing a file without file://
-    if parsed_fd.scheme == '':
-        if not os.path.isfile(fd):
-            raise IOError('Could not find file to extract: {}'.format(fd))
 
-        fd = 'file://%s' % os.path.abspath(fd)
-        parsed_fd = urlparse.urlparse(fd)
+    def download_unpack(self, url, extract_to='.', extract_dirs='*', verbose=False):
+        """Generic method to download and extract a compressed file without writing it to disk first.
 
-    request = urllib2.Request(fd)
-    request.add_header('Accept-encoding', 'gzip')
-    response = urllib2.urlopen(request)
+        Args:
+            url (str): URL where the file to be downloaded is located.
+            extract_to (str): directory where the downloaded file will
+                              be extracted to.
+            extract_dirs (list, optional): directories inside the archive to extract.
+                                           Defaults to `None`. It currently only applies to zip files.
 
-    if parsed_fd.scheme == 'file':
-        filename = fd.split('/')[-1]
-        # XXX: bz2/gz instead of tar.{bz2/gz}
-        extension = filename[filename.rfind('.')+1:]
-        mimetype = EXTENSION_TO_MIMETYPE[extension]
-    else:
-        mimetype = response.headers.type
+        Raises:
+            IOError: on `filename` file not found.
 
-    # This line gives too much information, however, it is good to have around
-    # LOG.debug(response.headers)
-    LOG.debug('Url:\t\t\t{}'.format(fd))
-    LOG.debug('Mimetype:\t\t{}'.format(mimetype))
-    LOG.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
+        """
+        extract_dirs = '*' if extract_dirs is None else extract_dirs
+        EXTENSION_TO_MIMETYPE = {
+            'bz2': 'application/x-bzip2',
+            'gz':  'application/x-gzip',
+            'tar': 'application/x-tar',
+            'zip': 'application/zip',
+        }
+        MIMETYPES = {
+            'application/x-bzip2': {
+                'function': self.deflate,
+                'kwargs': {'mode': 'r:bz2'},
+            },
+            'application/x-gzip': {
+                'function': self.deflate,
+                'kwargs': {'mode': 'r:gz'},
+            },
+            'application/x-tar': {
+                'function': self.deflate,
+                'kwargs': {'mode': 'r'},
+            },
+            'application/zip': {
+                'function': self.unzip,
+            },
+            'text/plain': {
+                'function': self.maybe_gzip,
+            },
+        }
 
-    function = MIMETYPES[mimetype]['function']
-    # Remove kwargs that have None as a value
-    kwargs = dict((k, v) for k, v in kwargs.iteritems() if v)
-    kwargs.update(MIMETYPES[mimetype].get('kwargs', {}))
+        parsed_url = urlparse.urlparse(url)
 
-    function(response=response, **kwargs)
+        # In case we're referrencing a file without file://
+        if parsed_url.scheme == '':
+            if not os.path.isfile(url):
+                raise IOError('Could not find file to extract: {}'.format(url))
+
+            url = 'file://%s' % os.path.abspath(url)
+            parsed_fd = urlparse.urlparse(url)
+
+        request = urllib2.Request(url)
+        request.add_header('Accept-encoding', 'gzip')
+        response = urllib2.urlopen(request)
+
+        if parsed_url.scheme == 'file':
+            filename = url.split('/')[-1]
+            # XXX: bz2/gz instead of tar.{bz2/gz}
+            extension = filename[filename.rfind('.')+1:]
+            mimetype = EXTENSION_TO_MIMETYPE[extension]
+        else:
+            mimetype = response.headers.type
+
+        self.debug('Url:\t\t\t{}'.format(url))
+        self.debug('Mimetype:\t\t{}'.format(mimetype))
+        self.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
+
+        function = MIMETYPES[mimetype]['function']
+        kwargs = {
+            'file_object': response,
+            'extract_to': extract_to,
+            'extract_dirs': extract_dirs,
+            'verbose': verbose,
+        }
+        kwargs.update(MIMETYPES[mimetype].get('kwargs', {}))
+
+        self.info('Downloading and extracting to {} these dirs {} from {}'.format(
+            extract_to,
+            ', '.join(extract_dirs),
+            url,
+        ))
+        function(**kwargs)
 
 
 def download_unpack_time(url, times, **kwargs):
+    factory = DownloadUnpack()
     timings = []
     for i in range(0, times):
         start = time.time()
-        download_unpack(url, **kwargs)
+        factory.download_unpack(url, **kwargs)
         timings.append(time.time() - start)
 
     LOG.info(
