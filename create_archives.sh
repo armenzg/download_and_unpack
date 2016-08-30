@@ -4,7 +4,7 @@
 
 filename=log.txt
 if [ ! -e "$filename" ]; then
-  wget -q -N https://queue.taskcluster.net/v1/task/Q3DrENo_Rn61YJvTZlkIwQ/runs/0/artifacts/public%2Flogs%2Flive_backing.log
+  wget -q -N https://queue.taskcluster.net/v1/task/Q3DrENo_Rn61YJvTZlkIwQ/runs/0/artifacts/public/logs/live_backing.log
   gunzip live_backing.log -c > $filename
   rm live_backing.log
 fi
@@ -22,5 +22,11 @@ if [ ! -e archive.tar.bz2 ]; then
 fi
 
 if [ ! -e archive.zip ]; then
-  zip archive.zip "$filename"
+  mkdir -p dir1
+  cp $filename dir1
+  mkdir -p dir2
+  touch dir2/empty.txt
+
+  zip archive.zip dir1/* dir2/*
+  rm -rf dir*
 fi
