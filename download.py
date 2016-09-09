@@ -180,6 +180,8 @@ class DownloadUnpack(Mozharness):
             extract_to (str, optional): where to extract the compressed file.
             extract_dirs (list, optional): directories inside the archive file to extract.
                                            Defaults to '*'.
+            verbose (bool, optional): whether or not extracted content should be displayed.
+                                      Defaults to False.
         """
         compressed_file = StringIO(file_object.read())
         try:
@@ -187,7 +189,8 @@ class DownloadUnpack(Mozharness):
                 entries = self._filter_entries(bundle.namelist(), extract_dirs)
 
                 for entry in entries:
-                    print '{} {}'.format(extract_to, entry)
+                    if verbose:
+                        self.info(' {}'.format(entry))
                     bundle.extract(entry, path=extract_to)
 
                     # ZipFile doesn't preserve permissions during extraction:
@@ -202,18 +205,20 @@ class DownloadUnpack(Mozharness):
         except zipfile.BadZipfile as e:
             self.exception('{}'.format(e.message))
 
-
     def deflate(self, file_object, mode, extract_to='.', extract_dirs='*', verbose=False):
         """This method allows to extract a tar, tar.bz2 and tar.gz file without writing to disk first.
 
         Args:
             file_object (object): Any file like object that is seekable.
             extract_to (str, optional): where to extract the compressed file.
+            extract_dirs (list, optional): directories inside the archive file to extract.
+                                           Defaults to `*`.
+            verbose (bool, optional): whether or not extracted content should be displayed.
+                                      Defaults to False.
         """
         compressed_file = StringIO(file_object.read())
         t = tarfile.open(fileobj=compressed_file, mode=mode)
         t.extractall(path=extract_to)
-
 
     def maybe_gzip(self, file_object, **kwargs):
         # XXX: Hack
@@ -223,46 +228,16 @@ class DownloadUnpack(Mozharness):
 
         if content_encoding == 'gzip':
             # XXX: Fix comment later
-            LOG.debug('Possibly ungzipping a txt file...')
+            self.debug('Possibly ungzipping a txt file...')
             compressed_file = StringIO(response.read())
             data = gzip.GzipFile(fileobj=compressed_file).read()
 
         elif not content_encoding:
-            LOG.debug('No content encoding')
+            self.debug('No content encoding')
             data = response.read()
 
         else:
             raise Exception('We have not yet added support for "{}" encoding'.format(content_encoding))
-
-
-    EXTENSION_TO_MIMETYPE = {
-        'bz2': 'application/x-bzip2',
-        'gz':  'application/x-gzip',
-        'tar': 'application/x-tar',
-        'txt': 'text/plain',
-        'zip': 'application/zip',
-    }
-    MIMETYPES = {
-        'application/x-bzip2': {
-            'function': deflate,
-            'kwargs': {'mode': 'r:bz2'},
-        },
-        'application/x-gzip': {
-            'function': deflate,
-            'kwargs': {'mode': 'r:gz'},
-        },
-        'application/x-tar': {
-            'function': deflate,
-            'kwargs': {'mode': 'r'},
-        },
-        'application/zip': {
-            'function': unzip,
-        },
-        'text/plain': {
-            'function': maybe_gzip,
-        },
-    }
-
 
     def download_unpack(self, url, extract_to='.', extract_dirs='*', verbose=False):
         """Generic method to download and extract a compressed file without writing it to disk first.
@@ -278,6 +253,7 @@ class DownloadUnpack(Mozharness):
             IOError: on `filename` file not found.
 
         """
+        # Many scripts overwrite this method and set extract_dirs to None
         extract_dirs = '*' if extract_dirs is None else extract_dirs
         EXTENSION_TO_MIMETYPE = {
             'bz2': 'application/x-bzip2',
@@ -317,6 +293,7 @@ class DownloadUnpack(Mozharness):
             parsed_fd = urlparse.urlparse(url)
 
         request = urllib2.Request(url)
+        # This line is for when we want to download a text file with gzip compression
         request.add_header('Accept-encoding', 'gzip')
         response = urllib2.urlopen(request)
 
@@ -328,9 +305,9 @@ class DownloadUnpack(Mozharness):
         else:
             mimetype = response.headers.type
 
-        self.debug('Url:\t\t\t{}'.format(url))
-        self.debug('Mimetype:\t\t{}'.format(mimetype))
-        self.debug('Content-Encoding\t{}'.format(response.headers.get('Content-Encoding')))
+        self.debug('Url: {}'.format(url))
+        self.debug('Mimetype: {}'.format(mimetype))
+        self.debug('Content-Encoding {}'.format(response.headers.get('Content-Encoding')))
 
         function = MIMETYPES[mimetype]['function']
         kwargs = {
@@ -346,7 +323,19 @@ class DownloadUnpack(Mozharness):
             ', '.join(extract_dirs),
             url,
         ))
-        function(**kwargs)
+        retry_args = dict(
+            failure_status=None,
+            retry_exceptions=(urllib2.HTTPError, urllib2.URLError,
+                              httplib.BadStatusLine,
+                              socket.timeout, socket.error),
+            error_message="Can't download from {}".format(url),
+            error_level=FATAL,
+        )
+        self.retry(
+            function,
+            kwargs=kwargs,
+            **retry_args
+        )
 
 
 def download_unpack_time(url, times, **kwargs):
