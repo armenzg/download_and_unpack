@@ -2,9 +2,11 @@
 import fnmatch
 import functools
 import gzip
+import httplib
 import itertools
 import logging
 import os
+import socket
 import sys
 import tarfile
 import time
@@ -16,8 +18,9 @@ import zlib
 from argparse import ArgumentParser
 from cStringIO import StringIO
 
-CWD = os.path.dirname(os.path.realpath(__file__))
-LOG = logging.getLogger()
+# mozharness log levels.
+DEBUG, INFO, WARNING, ERROR, CRITICAL, FATAL, IGNORE = (
+    'debug', 'info', 'warning', 'error', 'critical', 'fatal', 'ignore')
 
 
 def main():
@@ -50,17 +53,117 @@ def parse_args():
     return parser.parse_args()
 
 
-# I'm making this module a class to make it easier to compare with Mozharness' code
-class DownloadUnpack():
+class Mozharness():
+    config = {}
+
+    def __init__(self):
+        self.LOG = logging.getLogger()
+        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+
     def info(self, msg):
-        LOG.info(msg)
+        self.LOG.info(msg)
 
     def debug(self, msg):
-        LOG.debug(msg)
+        self.LOG.debug(msg)
 
     def warning(self, msg):
-        LOG.warning(msg)
+        self.LOG.warning(msg)
 
+    def exception(self, msg):
+        self.LOG.exception(msg)
+
+    def log(self, message, level=INFO, exit_code=-1):
+        # Simplifying the code
+        self.LOG.info(message)
+
+    # More complex commands {{{2
+    def retry(self, action, attempts=None, sleeptime=60, max_sleeptime=5 * 60,
+              retry_exceptions=(Exception, ), good_statuses=None, cleanup=None,
+              error_level=ERROR, error_message="%(action)s failed after %(attempts)d tries!",
+              failure_status=-1, log_level=INFO, args=(), kwargs={}):
+        """ generic retry command. Ported from `util.retry`_
+
+        Args:
+            action (func): callable object to retry.
+            attempts (int, optinal): maximum number of times to call actions.
+                Defaults to `self.config.get('global_retries', 5)`
+            sleeptime (int, optional): number of seconds to wait between
+                attempts. Defaults to 60 and doubles each retry attempt, to
+                a maximum of `max_sleeptime'
+            max_sleeptime (int, optional): maximum value of sleeptime. Defaults
+                to 5 minutes
+            retry_exceptions (tuple, optional): Exceptions that should be caught.
+                If exceptions other than those listed in `retry_exceptions' are
+                raised from `action', they will be raised immediately. Defaults
+                to (Exception)
+            good_statuses (object, optional): return values which, if specified,
+                will result in retrying if the return value isn't listed.
+                Defaults to `None`.
+            cleanup (func, optional): If `cleanup' is provided and callable
+                it will be called immediately after an Exception is caught.
+                No arguments will be passed to it. If your cleanup function
+                requires arguments it is recommended that you wrap it in an
+                argumentless function.
+                Defaults to `None`.
+            error_level (str, optional): log level name in case of error.
+                Defaults to `ERROR`.
+            error_message (str, optional): string format to use in case
+                none of the attempts success. Defaults to
+                '%(action)s failed after %(attempts)d tries!'
+            failure_status (int, optional): flag to return in case the retries
+                were not successfull. Defaults to -1.
+            log_level (str, optional): log level name to use for normal activity.
+                Defaults to `INFO`.
+            args (tuple, optional): positional arguments to pass onto `action`.
+            kwargs (dict, optional): key-value arguments to pass onto `action`.
+
+        Returns:
+            object: return value of `action`.
+            int: failure status in case of failure retries.
+        """
+        if not callable(action):
+            self.fatal("retry() called with an uncallable method %s!" % action)
+        if cleanup and not callable(cleanup):
+            self.fatal("retry() called with an uncallable cleanup method %s!" % cleanup)
+        if not attempts:
+            attempts = self.config.get("global_retries", 5)
+        if max_sleeptime < sleeptime:
+            self.debug("max_sleeptime %d less than sleeptime %d" % (
+                       max_sleeptime, sleeptime))
+        n = 0
+        while n <= attempts:
+            retry = False
+            n += 1
+            try:
+                self.log("retry: Calling %s with args: %s, kwargs: %s, attempt #%d" %
+                         (action.__name__, str(args), str(kwargs), n), level=log_level)
+                status = action(*args, **kwargs)
+                if good_statuses and status not in good_statuses:
+                    retry = True
+            except retry_exceptions, e:
+                retry = True
+                error_message = "%s\nCaught exception: %s" % (error_message, str(e))
+                self.log('retry: attempt #%d caught exception: %s' % (n, str(e)), level=INFO)
+
+            if not retry:
+                return status
+            else:
+                if cleanup:
+                    cleanup()
+                if n == attempts:
+                    self.log(error_message % {'action': action, 'attempts': n}, level=error_level)
+                    return failure_status
+                if sleeptime > 0:
+                    self.log("retry: Failed, sleeping %d seconds before retrying" %
+                             sleeptime, level=log_level)
+                    time.sleep(sleeptime)
+                    sleeptime = sleeptime * 2
+                    if sleeptime > max_sleeptime:
+                        sleeptime = max_sleeptime
+
+
+# I'm making this module a class to make it easier to compare with Mozharness' code
+class DownloadUnpack(Mozharness):
     def _filter_entries(self, namelist, extract_dirs):
         """Filter entries of the archive based on the specified list of to extract dirs."""
         filter_partial = functools.partial(fnmatch.filter, namelist)
